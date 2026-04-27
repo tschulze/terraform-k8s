@@ -1,0 +1,13 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    apiServerEndpoint: "${api_lb_private_ip}:6443"
+    token: ${bootstrap_token}
+    # CA cert SPKI SHA256 — see kubeadm-join-cp.yaml.tftpl for full rationale.
+    caCertHashes:
+      - sha256:${ca_cert_hash}
+nodeRegistration:
+  name: ${self_node_name}
+  kubeletExtraArgs:
+    node-ip: __NODE_PRIVATE_IP__

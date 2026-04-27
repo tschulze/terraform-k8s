@@ -1,0 +1,117 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+bootstrapTokens:
+  - token: ${bootstrap_token}
+    ttl: 24h0m0s
+    usages: [signing, authentication]
+    groups: [system:bootstrappers:kubeadm:default-node-token]
+certificateKey: ${cert_key}
+localAPIEndpoint:
+  advertiseAddress: __NODE_PRIVATE_IP__
+  bindPort: 6443
+nodeRegistration:
+  name: ${cp0_node_name}
+  kubeletExtraArgs:
+    node-ip: __NODE_PRIVATE_IP__
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v${kubernetes_version}.0
+clusterName: ${cluster_name}
+controlPlaneEndpoint: "${api_lb_private_ip}:6443"
+networking:
+  podSubnet: "${pod_cidr_v4},${pod_cidr_v6}"
+  serviceSubnet: "${service_cidr_v4},${service_cidr_v6}"
+controllerManager:
+  extraArgs:
+    bind-address: "0.0.0.0"
+    node-cidr-mask-size-ipv4: "24"
+    node-cidr-mask-size-ipv6: "64"
+    profiling: "false"
+apiServer:
+  extraArgs:
+    bind-address: "0.0.0.0"
+    # Anonymous auth is restricted to a small allow-list of paths via authentication-config.yaml
+    # (cluster-info for kubeadm join discovery, /healthz/livez/readyz for LB health probes).
+    # Cannot combine --anonymous-auth with --authentication-config; the config file fully controls anonymous.
+    authentication-config: /etc/kubernetes/authentication-config.yaml
+    profiling: "false"
+    encryption-provider-config: /etc/kubernetes/encryption-config.yaml
+    admission-control-config-file: /etc/kubernetes/admission-config.yaml
+    audit-policy-file: /etc/kubernetes/audit-policy.yaml
+    audit-log-path: /var/log/kubernetes/audit.log
+    audit-log-maxage: "30"
+    audit-log-maxbackup: "10"
+    audit-log-maxsize: "100"
+    # DoS hardening for the public-facing apiserver (LB at 6443 is internet-
+    # reachable). Defaults are 400/200/60s — enough headroom for a small
+    # cluster, but no protection against a slowloris that ties up connection
+    # slots. Tightened request-timeout drops slow clients faster; bumped
+    # in-flight ceilings give legitimate bursts (apply storms, controller
+    # convergence) room without hitting "Too Many Requests".
+    max-requests-inflight: "1000"
+    max-mutating-requests-inflight: "500"
+    request-timeout: "30s"
+    # TLS floor — drop TLS 1.0/1.1 even though Go's defaults already exclude
+    # them in recent versions. Belt-and-suspenders against a future Go
+    # downgrade or a misconfigured client.
+    tls-min-version: "VersionTLS13"
+  extraVolumes:
+    - name: authentication-config
+      hostPath: /etc/kubernetes/authentication-config.yaml
+      mountPath: /etc/kubernetes/authentication-config.yaml
+      readOnly: true
+      pathType: File
+    - name: encryption-config
+      hostPath: /etc/kubernetes/encryption-config.yaml
+      mountPath: /etc/kubernetes/encryption-config.yaml
+      readOnly: true
+      pathType: File
+    - name: admission-config
+      hostPath: /etc/kubernetes/admission-config.yaml
+      mountPath: /etc/kubernetes/admission-config.yaml
+      readOnly: true
+      pathType: File
+    - name: audit-policy
+      hostPath: /etc/kubernetes/audit-policy.yaml
+      mountPath: /etc/kubernetes/audit-policy.yaml
+      readOnly: true
+      pathType: File
+    - name: audit-log
+      hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      readOnly: false
+      pathType: DirectoryOrCreate
+  certSANs:
+%{ for san in cert_sans ~}
+    - "${san}"
+%{ endfor ~}
+scheduler:
+  extraArgs:
+    bind-address: "0.0.0.0"
+    profiling: "false"
+etcd:
+  local:
+    extraArgs:
+      # Bind etcd's metrics port to all interfaces (default is 127.0.0.1:2381),
+      # so the kube-prometheus-stack ServiceMonitor can scrape from a worker pod.
+      # Etcd peer + client traffic remain on their normal mTLS-protected ports;
+      # this only opens the unauthenticated metrics endpoint to the private
+      # Cloud Network. Acceptable: the network has no public ingress on 2381,
+      # and the metrics endpoint exposes telemetry only (no read/write API).
+      listen-metrics-urls: "http://0.0.0.0:2381"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd
+seccompDefault: true
+# Make kubelet request a CSR-signed serving cert (signed by the cluster CA) on
+# startup instead of using a self-signed cert. The kubelet-csr-approver in
+# kube-system auto-approves these CSRs so metrics-server / apiserver →
+# kubelet:10250 scrapes verify the chain end-to-end without --kubelet-insecure-tls.
+serverTLSBootstrap: true
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: iptables
+metricsBindAddress: 0.0.0.0:10249

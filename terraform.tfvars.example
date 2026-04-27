@@ -1,0 +1,124 @@
+# Copy this file to terraform.tfvars and fill in the values.
+# terraform.tfvars is gitignored; this .example file is committed.
+# Alternatively, set environment variables: TF_VAR_<name>=<value>
+
+# ----- Required -----
+
+# Hetzner Cloud API token (read+write), 64 chars.
+# Best practice: do NOT paste here; use `export TF_VAR_hcloud_token=...` in your shell.
+# hcloud_token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+# age recipient (public key) used to encrypt daily etcd snapshots on each CP.
+# REQUIRED — empty values are rejected. An etcd snapshot contains every Secret
+# in plaintext (etcdctl decrypts on read), so a single rooted CP for an hour
+# would otherwise leak the entire 14-day snapshot retention window.
+# Generate (one-time, on your laptop): age-keygen -o ~/.config/sops/age/keys.txt
+# The file's "# public key:" line is the recipient; the "AGE-SECRET-KEY-..."
+# line is the matching identity used by sealed_secrets_age_identity_path below.
+# etcd_snapshot_age_recipient = "age1abc..."
+
+# ----- Cluster shape (defaults shown) -----
+
+# cluster_name       = "k8s"
+# location           = "nbg1"          # fsn1, nbg1, hel1, hil, ash, sin
+# network_zone       = "eu-central"    # must match location's zone
+# os_image           = "debian-13"     # or debian-12; verify with: hcloud image list --type system | grep debian
+
+# cp_count           = 3                # odd, 1-7 (etcd quorum)
+# worker_count       = 3                # 0-50
+
+# cp_server_type     = "cx23"   # 2 vCPU / 4 GiB — fine for CPs (default)
+# worker_server_type = "cx33"   # 4 vCPU / 8 GiB — Rook-Ceph wants ≥8 GiB (default)
+
+# ----- SSH access (defaults shown) -----
+
+# ssh_public_key_path  = "~/.ssh/id_ed25519_hetzner.pub"
+# ssh_private_key_path = "~/.ssh/id_ed25519_hetzner"
+
+# ----- Networking (defaults shown) -----
+
+# network_cidr    = "10.0.0.0/24"        # Cloud Network subnet; must NOT overlap pod/service CIDRs
+# pod_cidr_v4     = "10.95.0.0/16"
+# pod_cidr_v6     = "2001:db8:95::/56"   # docs prefix is intentional, NAT-out via Calico
+# service_cidr_v4 = "10.96.0.0/16"
+# service_cidr_v6 = "2001:db8:96::/112"
+
+# ----- Versions (defaults shown) -----
+#
+# All Helm-installed charts that aren't bootstrap-critical (cert-manager, Traefik,
+# Rook-Ceph, kube-prometheus-stack, Falco, Trivy, Velero, Vector, Kyverno, etc.)
+# are now managed by Argo CD via the gitops repo; their version pins live there,
+# not here. Only the bootstrap layer (Calico CNI, kubelet-csr-approver,
+# sealed-secrets controller, Argo CD itself) is still chart-installed by terraform.
+#
+# kubernetes_version                  = "1.35"
+# tigera_operator_chart_version       = "v3.31.5"
+# kubelet_csr_approver_chart_version  = "1.2.14"
+# sealed_secrets_chart_version        = "2.18.5"
+# argocd_chart_version                = "9.5.4"
+
+# ----- Storage -----
+
+# Variable's default is 100 GB (production-recommended).
+# For initial bring-up, override to 10 (Hetzner minimum) to start cheap.
+ceph_osd_volume_size_gb = 10
+
+# ----- Traefik NodePorts (defaults shown) -----
+#
+# The services LB forwards :80 → traefik_node_port_http and :443 → traefik_node_port_https.
+# These must match the chart's service.ports values in the gitops repo.
+# traefik_node_port_http  = 30080
+# traefik_node_port_https = 30443
+
+# ----- Admin users -----
+#
+# Each name gets a 1-year client cert via the cluster CSR API + a
+# ClusterRoleBinding to cluster-admin, with kubeconfigs written to
+# secrets/admin-<name>-{v4,v6}.conf. Names must match ^[a-z][a-z0-9-]{0,30}$ —
+# they flow into shell commands and kubectl object names.
+# admin_users = ["alice", "bob"]
+
+# ----- Sealed-secrets master key persistence (defaults shown) -----
+#
+# The controller's master key is committed to secrets/sealed-secrets-master.key.yaml.age
+# (age-encrypted blob). On apply we decrypt it with the identity at the path below
+# and apply it before the controller starts so the key is stable across destroy/apply
+# (otherwise every existing SealedSecret in the gitops repo becomes undecryptable).
+# Same age key as etcd_snapshot_age_recipient above.
+# sealed_secrets_age_identity_path = "~/.config/sops/age/keys.txt"
+
+# ----- DNS (DigitalOcean DNS, free) -----
+#
+# When set, terraform creates these records on every apply:
+#   @ / *  →  services LB     (apex + wildcard for HTTP/HTTPS apps via Traefik)
+#   api    →  kube-API LB     (kubectl + SSH-jump shortcut)
+#
+# One-time prereqs:
+#   1. DigitalOcean Cloud Panel → Networking → Domains → add your zone (free,
+#      accepts subdomain zones — no need to move your apex domain).
+#   2. API → Tokens → Generate token with Custom Scopes: Domain read+update only.
+#      Export it: export TF_VAR_digitalocean_token=...
+#      (or set digitalocean_token below; sensitive).
+#   3. Delegate the subdomain on your existing DNS by adding NS records
+#      pointing at ns1.digitalocean.com, ns2.digitalocean.com, ns3.digitalocean.com.
+#
+# cluster_dns_zone   = "k8s.example.com"
+# digitalocean_token = "dop_v1_..."
+
+# ----- Argo CD (gitops deployment) -----
+#
+# UI hostname — set to expose via Traefik (HTTPRoute managed by gitops repo).
+# Leave empty for ClusterIP-only access via:
+#   kubectl -n argocd port-forward svc/argocd-server 8080:80
+# argocd_hostname = "argocd.example.com"
+#
+# App-of-Apps bootstrap. When argocd_repo_url is set, terraform creates the
+# repository Secret (using the SSH key at secrets/argocd-deploy by default) and
+# a root Application that syncs argocd_root_app_path from the repo. Everything
+# else (cert-manager, Traefik, Rook-Ceph, monitoring, etc.) is then managed by
+# Argo from gitops. Generate the deploy key with:
+#   ssh-keygen -t ed25519 -f secrets/argocd-deploy -N "" -C "argocd@<cluster>"
+# Then add secrets/argocd-deploy.pub to the repo's GitHub Settings → Deploy keys.
+# argocd_repo_url          = "git@github.com:owner/k8s-gitops.git"
+# argocd_root_app_path     = "argocd/apps"     # default
+# argocd_root_app_revision = "main"            # default

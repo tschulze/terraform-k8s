@@ -1,0 +1,57 @@
+#cloud-config
+hostname: ${node_name}
+fqdn: ${node_name}
+preserve_hostname: false
+
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, host_private_key_openssh)}
+  ed25519_public: ${host_public_key_openssh}
+
+write_files:
+  - path: /root/bootstrap-common.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, bootstrap_common_sh)}
+  - path: /root/kubeadm-join.yaml
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, kubeadm_join_yaml)}
+
+  - path: /root/worker-bootstrap.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      RESUME_SCRIPT=/root/worker-bootstrap.sh bash /root/bootstrap-common.sh
+      [[ -f /root/.bootstrap-pending-reboot ]] && { echo "Reboot pending; deferring kubeadm join to post-reboot resume."; exit 0; }
+      until nc -z ${api_lb_private_ip} 6443; do echo "waiting for API LB ${api_lb_private_ip}:6443"; sleep 5; done
+      set -o pipefail
+      # Pre-create the log at 0600 — see cp-join.yaml.tftpl for full reasoning.
+      touch /root/kubeadm-join.log && chmod 600 /root/kubeadm-join.log
+      # Retry until the bootstrap-token phase of kubeadm init has finished on cp[0]
+      # (apiserver port comes up earlier than that, so first attempts may fail with
+      # "Unauthorized: failed to request the cluster-info ConfigMap").
+      for i in $(seq 1 30); do
+        if kubeadm join --config=/root/kubeadm-join.yaml 2>&1 | tee -a /root/kubeadm-join.log; then
+          echo "kubeadm join succeeded on attempt $i"
+          break
+        fi
+        echo "kubeadm join attempt $i failed; retrying in 15s..."
+        sleep 15
+      done
+      [ -f /etc/kubernetes/kubelet.conf ] || { echo "ERROR: kubeadm join never succeeded"; exit 1; }
+      # Defense-in-depth: kubeadm-join.yaml contains the bootstrap token in
+      # plaintext. The token expires after 24h but the file has no lifetime;
+      # after a successful join kubeadm has consumed it — file is no longer
+      # useful, just a credential leak waiting for a filesystem read.
+      shred -u /root/kubeadm-join.yaml 2>/dev/null || rm -f /root/kubeadm-join.yaml
+      touch /root/kubeadm-join.done
+
+runcmd:
+  # umask 077 so /root/worker-bootstrap.log + /root/kubeadm-join.log land at
+  # 0600 — kubeadm logs include the bootstrap token in plaintext.
+  - umask 077 && bash /root/worker-bootstrap.sh 2>&1 | tee /root/worker-bootstrap.log

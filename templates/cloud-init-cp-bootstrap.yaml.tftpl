@@ -1,0 +1,162 @@
+#cloud-config
+hostname: ${node_name}
+fqdn: ${node_name}
+preserve_hostname: false
+
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, host_private_key_openssh)}
+  ed25519_public: ${host_public_key_openssh}
+
+write_files:
+  - path: /root/bootstrap-common.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, bootstrap_common_sh)}
+  - path: /etc/kubernetes/encryption-config.yaml
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, encryption_config_yaml)}
+  - path: /etc/kubernetes/admission-config.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, admission_config_yaml)}
+  - path: /etc/kubernetes/authentication-config.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, authentication_config_yaml)}
+  - path: /etc/kubernetes/audit-policy.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, audit_policy_yaml)}
+  - path: /root/kubeadm-config.yaml
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, kubeadm_config_yaml)}
+  # Pre-place the cluster CA so `kubeadm init` adopts it instead of generating
+  # a fresh one. Lets us pin caCertHashes on joins (no unsafeSkipCAVerification)
+  # and keeps the CA stable across destroy/apply.
+  - path: /etc/kubernetes/pki/ca.crt
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, cluster_ca_cert_pem)}
+  - path: /etc/kubernetes/pki/ca.key
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, cluster_ca_key_pem)}
+  - path: /usr/local/bin/etcd-snapshot.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, etcd_snapshot_sh)}
+  - path: /usr/local/bin/cert-renew.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, cert_renew_sh)}
+  - path: /etc/systemd/system/etcd-snapshot.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=etcd snapshot
+      After=kubelet.service
+
+      [Service]
+      Type=oneshot
+      Environment=AGE_RECIPIENT=${etcd_age_recipient}
+      ExecStart=/usr/local/bin/etcd-snapshot.sh
+  - path: /etc/systemd/system/etcd-snapshot.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Daily etcd snapshot
+
+      [Timer]
+      OnCalendar=daily
+      RandomizedDelaySec=15m
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  - path: /etc/systemd/system/kubeadm-cert-renew.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=kubeadm certificate renewal
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/cert-renew.sh
+  - path: /etc/systemd/system/kubeadm-cert-renew.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Monthly kubeadm certificate renewal
+
+      [Timer]
+      OnCalendar=monthly
+      RandomizedDelaySec=12h
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  - path: /root/cp-bootstrap.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      mkdir -p /var/log/kubernetes /etc/kubernetes/manifests
+      RESUME_SCRIPT=/root/cp-bootstrap.sh bash /root/bootstrap-common.sh
+      [[ -f /root/.bootstrap-pending-reboot ]] && { echo "Reboot pending; deferring kubeadm init to post-reboot resume."; exit 0; }
+      systemctl restart kubelet
+      sleep 5
+      set -o pipefail
+      # Pre-create the log at 0600 so any future re-execution path (post-
+      # reboot resume, manual re-run) inherits the correct mode regardless
+      # of the resumed shell's umask. The runcmd `umask 077` covers the
+      # first-boot path; this covers everything else.
+      touch /root/kubeadm-init.log && chmod 600 /root/kubeadm-init.log
+      kubeadm init --config=/root/kubeadm-config.yaml --upload-certs 2>&1 | tee /root/kubeadm-init.log
+      mkdir -p /root/.kube
+      cp -f /etc/kubernetes/admin.conf /root/.kube/config
+      chmod 600 /root/.kube/config
+      # kubeadm's kubelet-finalize phase restarts kubelet, which briefly stops all
+      # static pods (apiserver/etcd/controller-manager/scheduler). Wait for apiserver to
+      # be stably responsive so downstream Helm releases don't hit "EOF" errors.
+      echo "Waiting for kube-apiserver to be consistently healthy..."
+      ok=0
+      for i in $(seq 1 90); do
+        if kubectl --kubeconfig=/root/.kube/config get --raw /livez >/dev/null 2>&1; then
+          ok=$((ok + 1))
+          [ $ok -ge 10 ] && { echo "API stable after $i attempts"; break; }
+        else
+          ok=0
+        fi
+        sleep 2
+      done
+      DEBIAN_FRONTEND=noninteractive apt-get install -y etcd-client age
+      systemctl daemon-reload
+      systemctl enable --now etcd-snapshot.timer kubeadm-cert-renew.timer
+      # Defense-in-depth: kubeadm-config.yaml contains the bootstrap token
+      # in plaintext. The token expires after 24h on its own, but the file
+      # has no lifetime — keep it around indefinitely and any post-bootstrap
+      # filesystem read window is a credential leak. After successful init
+      # the file is no longer needed (kubeadm has already consumed it).
+      shred -u /root/kubeadm-config.yaml 2>/dev/null || rm -f /root/kubeadm-config.yaml
+      touch /root/kubeadm-init.done
+
+runcmd:
+  # umask 077 so /root/cp-bootstrap.log + /root/kubeadm-init.log land at 0600.
+  # kubeadm prints the bootstrap token + certificate-key on stdout — at 0644
+  # those would be readable by any pod that mounts /root via hostPath
+  # (PSA-exempt namespaces can do that). 0600 + /root being 0700 contains it.
+  - umask 077 && bash /root/cp-bootstrap.sh 2>&1 | tee /root/cp-bootstrap.log

@@ -1,0 +1,94 @@
+# Argo CD chart values — tuned for a small cluster.
+# Single replicas across the board; bump for HA later if needed.
+
+global:
+%{ if hostname != "" ~}
+  domain: ${hostname}
+%{ endif ~}
+
+configs:
+  params:
+    # Serve plain HTTP from the pod — Traefik handles TLS termination at the
+    # gateway. Without this Argo CD insists on terminating TLS itself with its
+    # self-signed cert and the HTTPRoute can't proxy cleanly.
+    server.insecure: true
+
+  cm:
+    # Useful default — let kubectl-style impersonation work in the UI for cluster admins.
+    application.instanceLabelKey: argocd.argoproj.io/instance
+
+  secret:
+    # Don't let the chart create its own argocd-secret with a random admin
+    # password. null_resource.argocd_admin_secret in helm-argocd.tf pre-applies
+    # the Secret from secrets/argocd-admin-password.yaml.age (age-encrypted
+    # blob in this repo) BEFORE this helm release runs. Same persistence
+    # pattern as the sealed-secrets master key — admin login survives
+    # `terraform destroy && terraform apply`.
+    createSecret: false
+
+server:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+repoServer:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+applicationSet:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+dex:
+  enabled: false  # No SSO by default — flip on + configure when needed.
+
+notifications:
+  enabled: false  # Add later for sync-failure Slack pings.
+
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi

@@ -1,0 +1,197 @@
+#!/bin/bash
+set -euo pipefail
+
+# Idempotent: skip everything if we already ran (we may be re-invoked by the
+# bootstrap-resume systemd unit after a kernel-reboot during initial setup).
+if [[ -f /root/bootstrap-common.done ]]; then
+  # We're past the reboot; clear the deferral marker so the parent runs kubeadm now.
+  rm -f /root/.bootstrap-pending-reboot
+  echo "bootstrap-common already done — skipping."
+  exit 0
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+# 1. Wait for NTP sync — TLS cert validation needs a correct clock. Hetzner images
+# boot with a stale RTC; systemd-timesyncd runs by default but takes a moment.
+echo "Waiting for system clock to sync..."
+timedatectl set-ntp true 2>/dev/null || true
+for _ in $(seq 1 60); do
+  if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == "yes" ]]; then
+    echo "Clock synced: $(date -u)"
+    break
+  fi
+  sleep 2
+done
+
+# 2. Refresh apt metadata FIRST so the next step picks up the newest available
+# ca-certificates (rather than whatever shipped in the base image's apt cache).
+# Hetzner repos use HTTP, so this step doesn't itself need a working TLS store.
+apt update
+
+# 3. Refresh the system CA trust store BEFORE anything that touches HTTPS —
+# Hetzner base images can ship a stale /etc/ssl/certs/ca-certificates.crt
+# missing the chains modern services use (download.docker.com, pkgs.k8s.io).
+# --reinstall forces the postinst even if the package version is unchanged.
+apt install -y --reinstall ca-certificates
+update-ca-certificates -f
+
+# 4. Disable swap (kubeadm requirement)
+swapoff -a
+sed -i '/ swap / s/^/#/' /etc/fstab
+
+# 5. Kernel modules
+cat > /etc/modules-load.d/k8s.conf <<'EOF'
+br_netfilter
+overlay
+EOF
+modprobe br_netfilter overlay
+
+# 6. Sysctl forwarding + bridge
+cat > /etc/sysctl.d/99-k8s.conf <<'EOF'
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+net.ipv6.conf.all.forwarding        = 1
+EOF
+sysctl --system
+
+# 7. Install unattended-upgrades — runs security patches overnight in the
+# background, ongoing.
+apt install -y unattended-upgrades
+systemctl enable --now unattended-upgrades
+
+# 8. Bring base system to latest BEFORE installing kubernetes packages, so they
+# build on top of an up-to-date kernel/openssl/etc. Conf-file conflicts default
+# to the existing config (--force-confold). Kernel updates take effect at the
+# scheduled reboot below if /var/run/reboot-required appears.
+apt upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+apt autoremove -y
+
+# Apt prereqs
+apt install -y \
+  apt-transport-https ca-certificates curl gpg \
+  lvm2 nfs-common conntrack socat gettext-base
+
+# Retry helper for one-shot GPG key downloads. Plain TLS verification — if it
+# fails after retries, bootstrap aborts (no insecure fallback). We download to a
+# temp file first (instead of curl|gpg pipe) because gpg in a tty-less context
+# (cloud-init runcmd) tries to open /dev/tty for status output, which closes the
+# pipe early and makes curl report "Failed writing body".
+fetch() {
+  local url=$1 dst=$2
+  local tmp
+  tmp=$(mktemp)
+  trap "rm -f '$tmp'" RETURN
+  for attempt in 1 2 3; do
+    if curl -fsSL "$url" -o "$tmp" && gpg --batch --no-tty --dearmor --yes -o "$dst" "$tmp"; then
+      return 0
+    fi
+    echo "fetch attempt $attempt failed for $url; sleeping..." >&2
+    sleep 5
+  done
+  echo "ERROR: gave up fetching $url after 3 attempts" >&2
+  return 1
+}
+
+# Docker repo (for containerd.io)
+install -m 0755 -d /etc/apt/keyrings
+fetch https://download.docker.com/linux/debian/gpg /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+CODENAME=$(. /etc/os-release && echo $${VERSION_CODENAME})
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $${CODENAME} stable" \
+  > /etc/apt/sources.list.d/docker.list
+
+# Kubernetes apt repo
+fetch https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/Release.key /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/ /" \
+  > /etc/apt/sources.list.d/kubernetes.list
+
+apt update
+apt install -y containerd.io kubelet kubeadm kubectl
+apt-mark hold kubelet kubeadm kubectl
+
+# containerd config with SystemdCgroup=true
+mkdir -p /etc/containerd
+containerd config default > /etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+
+systemctl daemon-reload
+systemctl enable containerd
+systemctl restart containerd  # explicit restart so /etc/containerd/config.toml takes effect
+systemctl enable kubelet
+
+# Wait for Cloud Network NIC and detect interface name
+echo "Waiting for Cloud Network NIC..."
+IFACE=""
+for _ in $(seq 1 60); do
+  IFACE=$(ip -br link | awk '$2=="UP" && $1!~/^lo|eth0/ {print $1; exit}')
+  if [[ -n "$IFACE" ]]; then
+    echo "Cloud Network NIC: $IFACE"
+    break
+  fi
+  sleep 2
+done
+if [[ -z "$IFACE" ]]; then
+  echo "ERROR: Cloud Network NIC did not appear within 120s" >&2
+  exit 1
+fi
+# Detect this node's private IP on the Cloud Network NIC (Hetzner auto-assigned),
+# then substitute it into kubeadm config files. Done BEFORE the reboot block so
+# the substituted file survives the reboot — bootstrap-common.sh is short-circuited
+# on resume by the marker, so the substitution must happen on first boot.
+NODE_PRIVATE_IP=""
+for _ in $(seq 1 30); do
+  NODE_PRIVATE_IP=$(ip -4 -o addr show dev "$IFACE" | awk '{print $4}' | cut -d/ -f1 | head -1)
+  if [[ -n "$NODE_PRIVATE_IP" ]]; then break; fi
+  sleep 2
+done
+if [[ -z "$NODE_PRIVATE_IP" ]]; then
+  echo "ERROR: no IPv4 on $IFACE after 60s" >&2
+  exit 1
+fi
+echo "Cloud Network IP: $NODE_PRIVATE_IP"
+export NODE_PRIVATE_IP
+for f in /root/kubeadm-config.yaml /root/kubeadm-join.yaml; do
+  if [[ -f "$f" ]]; then
+    sed -i "s|__NODE_PRIVATE_IP__|$NODE_PRIVATE_IP|g" "$f"
+    echo "patched $f"
+  fi
+done
+
+touch /root/bootstrap-common.done
+
+# If apt upgrade above wrote /var/run/reboot-required (typically a kernel bump),
+# defer the rest of the bootstrap (kubeadm init/join etc.) to the second boot
+# via a one-shot systemd unit that re-runs the parent script. The IP substitution
+# above already happened, so kubeadm-config.yaml is ready for kubeadm to consume
+# after the reboot.
+if [[ -f /var/run/reboot-required && -n "$${RESUME_SCRIPT:-}" ]]; then
+  echo "Reboot required after upgrade. Scheduling resume of $${RESUME_SCRIPT}..."
+  cat > /etc/systemd/system/bootstrap-resume.service <<EOF
+[Unit]
+Description=Resume cluster bootstrap after kernel reboot
+After=network-online.target containerd.service
+Wants=network-online.target
+ConditionPathExists=$${RESUME_SCRIPT}
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $${RESUME_SCRIPT}
+ExecStartPost=/bin/systemctl disable bootstrap-resume.service
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable bootstrap-resume.service
+  # Schedule the reboot via a transient systemd timer 15s out so that cloud-init's
+  # runcmd phase (which is calling us) can finish cleanly. Calling `systemctl reboot`
+  # synchronously here aborts cloud-init's IPC socket cleanup with a noisy traceback.
+  echo "Reboot scheduled in 15s; exiting bootstrap-common cleanly so cloud-init finalizes."
+  systemd-run --quiet --unit=bootstrap-reboot --on-active=15s systemctl reboot
+  # Marker tells the parent script to skip kubeadm init/join — we'll do that on resume.
+  touch /root/.bootstrap-pending-reboot
+  exit 0
+fi

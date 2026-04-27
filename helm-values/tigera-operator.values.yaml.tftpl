@@ -1,0 +1,28 @@
+installation:
+  kubernetesProvider: ""
+  cni:
+    type: Calico
+  calicoNetwork:
+    bgp: Disabled
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: ${pod_cidr_v4}
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()
+      - name: default-ipv6-ippool
+        cidr: ${pod_cidr_v6}
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()
+
+# Tigera operator chart v3.31 default-enables Goldmane (flow log aggregator)
+# and Whisker (in-cluster observability UI on top of Goldmane). Both deploy
+# extra workloads (~200-400 MiB total). Whisker is intentionally NOT exposed
+# via HTTPRoute yet — it has no built-in auth, so wait for SSO (dex/OIDC) to
+# put it behind authenticated ingress at e.g. whisker.k8s.c-programming.net.
+# Until then, reachable in-cluster via `kubectl port-forward`.
+goldmane:
+  enabled: true
+whisker:
+  enabled: true

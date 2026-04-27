@@ -1,0 +1,26 @@
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  # ConfigMaps are encrypted alongside Secrets. Charts routinely stash
+  # database connection strings, API endpoints, OIDC issuer URLs, and other
+  # config-but-also-credential data into ConfigMaps. Encrypting them at rest
+  # closes a real gap: an attacker who reads etcd files directly (e.g. CP
+  # node compromise + /var/lib/etcd access) would otherwise still see all
+  # ConfigMap contents in plaintext even after Secrets are protected.
+  - resources:
+      - secrets
+      - configmaps
+    providers:
+      # AES-GCM (authenticated encryption — confidentiality + integrity).
+      # Recommended over AES-CBC (which has no integrity, only confidentiality)
+      # since k8s 1.13. Same 32-byte base64 key shape as CBC; k8s manages the
+      # GCM nonce internally with a per-write counter so we don't have to.
+      - aesgcm:
+          keys:
+            - name: ${active_key_name}
+              secret: ${active_key_secret}
+%{ for k in retired_keys ~}
+            - name: ${k.name}
+              secret: ${k.secret}
+%{ endfor ~}
+      - identity: {}

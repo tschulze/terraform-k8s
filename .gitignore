@@ -1,0 +1,16 @@
+.terraform/
+# .terraform.lock.hcl is intentionally COMMITTED — it pins provider versions
+# + checksums for reproducible builds and defends against a malicious
+# provider release between applies. Do not add it back to .gitignore.
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.example.tfvars
+crash.log
+crash.*.log
+secrets/
+!secrets/sealed-secrets-master.key.yaml.age
+!secrets/argocd-admin-password.yaml.age
+
+# Claude Code per-project state (tool allowlist, scheduled-task locks)
+.claude/

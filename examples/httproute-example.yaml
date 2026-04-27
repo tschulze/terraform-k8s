@@ -1,0 +1,77 @@
+# Example HTTPRoute mirroring the reference cluster's pattern.
+# Copy, adjust hostname / backend Service, and `kubectl apply -f` from any namespace.
+#
+# Prereq: a Service `my-app` exists in the same namespace, listening on port 80.
+#
+# The Gateway `traefik-gateway` lives in the `traefik` namespace (created by the
+# Traefik Helm release). Both `web` (HTTP) and `websecure` (HTTPS, only if
+# var.traefik_tls_cert_secret_name is set) listeners are available via sectionName.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  hostnames:
+    - my-app.example.local        # must match the Gateway listener's hostname pattern
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: traefik-gateway
+      namespace: traefik
+      sectionName: web            # use 'websecure' for HTTPS; remove sectionName to match all listeners
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: my-app
+          port: 80
+          weight: 1
+
+---
+# Example with both web (HTTP) and websecure (HTTPS) listeners + header rewrite,
+# directly mirroring the reference cluster's `documentserver-http` pattern.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-app-dual
+  namespace: default
+spec:
+  hostnames:
+    - my-app.example.local
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: traefik-gateway
+      namespace: traefik
+      sectionName: websecure
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: X-Forwarded-Proto
+                value: https
+              - name: X-Forwarded-Port
+                value: "443"
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: my-app
+          port: 80
+          weight: 1

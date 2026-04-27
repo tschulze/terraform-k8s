@@ -1,0 +1,73 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - RequestReceived
+rules:
+  # Don't log read-only authn/authz checks (high volume, low value)
+  - level: None
+    nonResourceURLs:
+      - /healthz*
+      - /version
+      - /metrics
+      - /swagger*
+  - level: None
+    users:
+      - system:kube-proxy
+      - system:apiserver
+    verbs:
+      - watch
+      - get
+      - list
+
+  # CSRs: full RequestResponse — a CSR (especially a node-serving one) is the
+  # signing-time evidence we'd want during a forensic review. Volume is low
+  # (one per kubelet boot + monthly cert renewals), so logging the response
+  # body is cheap.
+  - level: RequestResponse
+    resources:
+      - group: certificates.k8s.io
+        resources:
+          - certificatesigningrequests
+
+  # Authorization-decision APIs: full RequestResponse so the audit trail
+  # captures both the question (which subject + verb + resource was probed)
+  # and the answer. Without this, an attacker doing `kubectl auth can-i`
+  # / `kubectl auth get-rules` to enumerate their own privileges before the
+  # actual escalation attempt leaves only Metadata-level breadcrumbs — the
+  # forensic story for "how did they know what to try next" is missing.
+  # Volume is moderate (controllers do their own can-i checks routinely);
+  # if log size becomes a concern, drop the SARs by `system:` users.
+  - level: RequestResponse
+    resources:
+      - group: authorization.k8s.io
+        resources:
+          - subjectaccessreviews
+          - selfsubjectaccessreviews
+          - selfsubjectrulesreviews
+          - localsubjectaccessreviews
+
+  # Secrets, ConfigMaps: log Metadata only (never log the value). Includes
+  # reads (get/list/watch) so the audit trail captures who-read-what-when —
+  # a Secret read by a non-controller principal is itself an interesting
+  # signal even if the value isn't recorded.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources:
+          - secrets
+          - configmaps
+      - group: authentication.k8s.io
+        resources:
+          - tokenreviews
+
+  # Mutating verbs everywhere else: log request + response
+  - level: RequestResponse
+    verbs:
+      - create
+      - update
+      - patch
+      - delete
+      - deletecollection
+
+  # Default for everything else: Metadata
+  - level: Metadata

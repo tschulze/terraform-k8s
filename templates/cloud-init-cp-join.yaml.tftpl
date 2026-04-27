@@ -1,0 +1,142 @@
+#cloud-config
+hostname: ${node_name}
+fqdn: ${node_name}
+preserve_hostname: false
+
+ssh_keys:
+  ed25519_private: |
+    ${indent(4, host_private_key_openssh)}
+  ed25519_public: ${host_public_key_openssh}
+
+write_files:
+  - path: /root/bootstrap-common.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, bootstrap_common_sh)}
+  - path: /etc/kubernetes/encryption-config.yaml
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, encryption_config_yaml)}
+  - path: /etc/kubernetes/admission-config.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, admission_config_yaml)}
+  - path: /etc/kubernetes/authentication-config.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, authentication_config_yaml)}
+  - path: /etc/kubernetes/audit-policy.yaml
+    permissions: "0644"
+    owner: root:root
+    content: |
+      ${indent(6, audit_policy_yaml)}
+  - path: /root/kubeadm-join.yaml
+    permissions: "0600"
+    owner: root:root
+    content: |
+      ${indent(6, kubeadm_join_yaml)}
+  - path: /usr/local/bin/etcd-snapshot.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, etcd_snapshot_sh)}
+  - path: /usr/local/bin/cert-renew.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      ${indent(6, cert_renew_sh)}
+  - path: /etc/systemd/system/etcd-snapshot.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=etcd snapshot
+      After=kubelet.service
+
+      [Service]
+      Type=oneshot
+      %{ if etcd_age_recipient != "" ~}
+      Environment=AGE_RECIPIENT=${etcd_age_recipient}
+      %{ endif ~}
+      ExecStart=/usr/local/bin/etcd-snapshot.sh
+  - path: /etc/systemd/system/etcd-snapshot.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Daily etcd snapshot
+
+      [Timer]
+      OnCalendar=daily
+      RandomizedDelaySec=15m
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  - path: /etc/systemd/system/kubeadm-cert-renew.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=kubeadm certificate renewal
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/cert-renew.sh
+  - path: /etc/systemd/system/kubeadm-cert-renew.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Monthly kubeadm certificate renewal
+
+      [Timer]
+      OnCalendar=monthly
+      RandomizedDelaySec=12h
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  - path: /root/cp-join.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      mkdir -p /var/log/kubernetes /etc/kubernetes/manifests
+      RESUME_SCRIPT=/root/cp-join.sh bash /root/bootstrap-common.sh
+      [[ -f /root/.bootstrap-pending-reboot ]] && { echo "Reboot pending; deferring kubeadm join to post-reboot resume."; exit 0; }
+      systemctl restart kubelet
+      until nc -z ${api_lb_private_ip} 6443; do echo "waiting for API LB ${api_lb_private_ip}:6443"; sleep 5; done
+      set -o pipefail
+      # Pre-create the log at 0600 — `tee -a` appends without resetting
+      # mode, so the file's perms at first creation are what stick. On a
+      # post-reboot resume the runcmd umask is no longer in effect; without
+      # this the log would land at 0644 and leak the bootstrap token +
+      # certificate-key.
+      touch /root/kubeadm-join.log && chmod 600 /root/kubeadm-join.log
+      # Retry: bootstrap-token phase runs after apiserver port is up
+      for i in $(seq 1 30); do
+        if kubeadm join --config=/root/kubeadm-join.yaml 2>&1 | tee -a /root/kubeadm-join.log; then
+          echo "kubeadm join succeeded on attempt $i"
+          break
+        fi
+        echo "kubeadm join attempt $i failed; retrying in 15s..."
+        sleep 15
+      done
+      [ -f /etc/kubernetes/kubelet.conf ] || { echo "ERROR: kubeadm join never succeeded"; exit 1; }
+      DEBIAN_FRONTEND=noninteractive apt-get install -y etcd-client age
+      systemctl daemon-reload
+      systemctl enable --now etcd-snapshot.timer kubeadm-cert-renew.timer
+      # Defense-in-depth: kubeadm-join.yaml contains the bootstrap token +
+      # certificate-key in plaintext. Both expire (24h / 2h) but the file
+      # has no lifetime. After a successful join kubeadm has consumed both
+      # — the file is no longer useful, just a credential leak waiting for
+      # a filesystem read.
+      shred -u /root/kubeadm-join.yaml 2>/dev/null || rm -f /root/kubeadm-join.yaml
+      touch /root/kubeadm-join.done
+
+runcmd:
+  # umask 077 so /root/cp-join.log + /root/kubeadm-join.log land at 0600 —
+  # kubeadm logs include the bootstrap token + certificate-key in plaintext.
+  - umask 077 && bash /root/cp-join.sh 2>&1 | tee /root/cp-join.log

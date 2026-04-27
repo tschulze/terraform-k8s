@@ -1,0 +1,137 @@
+# Template: apply this set of NetworkPolicies to a new application namespace
+# to get the same default-deny posture as the `default` namespace.
+#
+#   sed 's/REPLACE_NAMESPACE/myapp/g' examples/networkpolicy-template.yaml | kubectl apply -f -
+#
+# Then add per-app allowlists for the specific traffic your workloads need
+# (backend → database, app → external HTTPS API, etc.).
+#
+# The Namespace below also pins PSA `restricted` enforcement explicitly so it
+# survives any future change to the cluster default.
+
+---
+# Pod Security Admission: restricted enforcement.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: REPLACE_NAMESPACE
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+
+---
+# Drop everything not explicitly allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: REPLACE_NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+
+---
+# DNS to kube-dns in kube-system.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: REPLACE_NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# kube-apiserver egress (cluster Cloud Network).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-apiserver
+  namespace: REPLACE_NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/24      # match var.network_cidr
+      ports:
+        - protocol: TCP
+          port: 6443
+
+---
+# Ingress from Traefik (for HTTPRoutes / Ingress resources).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-ingress
+  namespace: REPLACE_NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+
+---
+# Intra-namespace pod-to-pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: REPLACE_NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+
+---
+# Example: allow egress to a specific external HTTPS API by FQDN
+# (NetworkPolicy doesn't natively resolve DNS — use ipBlock or Calico GlobalNetworkPolicy
+# with serviceAccountSelector for richer matching).
+#
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: allow-egress-external-api
+#   namespace: REPLACE_NAMESPACE
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: my-app-needing-external
+#   policyTypes: [Egress]
+#   egress:
+#     - to:
+#         - ipBlock:
+#             cidr: 0.0.0.0/0
+#             except:
+#               - 10.0.0.0/8
+#               - 172.16.0.0/12
+#               - 192.168.0.0/16
+#       ports:
+#         - protocol: TCP
+#           port: 443
