@@ -26,8 +26,16 @@ configs:
     # `terraform destroy && terraform apply`.
     createSecret: false
 
+# priorityClassName: system-cluster-critical on the gitops-critical components
+# (controller, server, repo-server). Without it, a memory-pressured worker
+# preempts the application-controller and the cluster loses its ability to
+# self-heal — observed during 2026-04-28 smoke test before workers were
+# resized: controller pod went Completed, no other reconcile could happen,
+# every Argo Application stuck OutOfSync forever. applicationSet + redis
+# stay at default priority because losing them doesn't break sync.
 server:
   replicas: 1
+  priorityClassName: system-cluster-critical
   resources:
     requests:
       cpu: 50m
@@ -41,6 +49,7 @@ server:
 
 repoServer:
   replicas: 1
+  priorityClassName: system-cluster-critical
   resources:
     requests:
       cpu: 50m
@@ -68,6 +77,7 @@ applicationSet:
 
 controller:
   replicas: 1
+  priorityClassName: system-cluster-critical
   resources:
     requests:
       cpu: 100m

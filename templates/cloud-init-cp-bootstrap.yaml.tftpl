@@ -8,60 +8,64 @@ ssh_keys:
     ${indent(4, host_private_key_openssh)}
   ed25519_public: ${host_public_key_openssh}
 
+# Embedded files use cloud-init's `encoding: gz+b64` so each payload is gzip
+# compressed then base64 encoded. Without this, the rendered cp0 user_data
+# exceeds Hetzner's 32 KiB cap (mostly the RSA-4096 cluster CA + bootstrap
+# script + kubeadm config). cloud-init decodes transparently before write.
 write_files:
   - path: /root/bootstrap-common.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, bootstrap_common_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(bootstrap_common_sh)}
   - path: /etc/kubernetes/encryption-config.yaml
     permissions: "0600"
     owner: root:root
-    content: |
-      ${indent(6, encryption_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(encryption_config_yaml)}
   - path: /etc/kubernetes/admission-config.yaml
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, admission_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(admission_config_yaml)}
   - path: /etc/kubernetes/authentication-config.yaml
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, authentication_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(authentication_config_yaml)}
   - path: /etc/kubernetes/audit-policy.yaml
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, audit_policy_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(audit_policy_yaml)}
   - path: /root/kubeadm-config.yaml
     permissions: "0600"
     owner: root:root
-    content: |
-      ${indent(6, kubeadm_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(kubeadm_config_yaml)}
   # Pre-place the cluster CA so `kubeadm init` adopts it instead of generating
   # a fresh one. Lets us pin caCertHashes on joins (no unsafeSkipCAVerification)
   # and keeps the CA stable across destroy/apply.
   - path: /etc/kubernetes/pki/ca.crt
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, cluster_ca_cert_pem)}
+    encoding: gz+b64
+    content: ${base64gzip(cluster_ca_cert_pem)}
   - path: /etc/kubernetes/pki/ca.key
     permissions: "0600"
     owner: root:root
-    content: |
-      ${indent(6, cluster_ca_key_pem)}
+    encoding: gz+b64
+    content: ${base64gzip(cluster_ca_key_pem)}
   - path: /usr/local/bin/etcd-snapshot.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, etcd_snapshot_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(etcd_snapshot_sh)}
   - path: /usr/local/bin/cert-renew.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, cert_renew_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(cert_renew_sh)}
   - path: /etc/systemd/system/etcd-snapshot.service
     permissions: "0644"
     content: |

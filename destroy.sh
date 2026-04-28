@@ -26,6 +26,20 @@ else
   echo "    (no helm_release entries in state — already clean)"
 fi
 
+# The cluster CA carries lifecycle.prevent_destroy as a guard against an
+# accidental `terraform taint` rotating the trust root. That guard would also
+# block this scripted teardown. State-rm forgets the resource (no real
+# infrastructure to destroy — tls_private_key is pure local material) so
+# destroy can proceed; the next `terraform apply` regenerates a fresh CA.
+echo "==> Removing cluster CA from state (prevent_destroy guard bypass)..."
+ca_resources=$(terraform state list 2>/dev/null \
+  | grep -E '^(tls_private_key|tls_self_signed_cert)\.cluster_ca$' || true)
+if [[ -n "$ca_resources" ]]; then
+  echo "$ca_resources" | xargs -n1 terraform state rm
+else
+  echo "    (no cluster CA in state — already clean)"
+fi
+
 echo "==> terraform destroy..."
 terraform destroy -auto-approve "$@"
 

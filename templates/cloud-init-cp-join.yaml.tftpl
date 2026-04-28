@@ -8,47 +8,50 @@ ssh_keys:
     ${indent(4, host_private_key_openssh)}
   ed25519_public: ${host_public_key_openssh}
 
+# Embedded files use cloud-init's `encoding: gz+b64` (matches cp-bootstrap).
+# Kept consistent across bootstrap/join/worker so any template change applies
+# uniformly; also leaves headroom under Hetzner's 32 KiB user_data cap.
 write_files:
   - path: /root/bootstrap-common.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, bootstrap_common_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(bootstrap_common_sh)}
   - path: /etc/kubernetes/encryption-config.yaml
     permissions: "0600"
     owner: root:root
-    content: |
-      ${indent(6, encryption_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(encryption_config_yaml)}
   - path: /etc/kubernetes/admission-config.yaml
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, admission_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(admission_config_yaml)}
   - path: /etc/kubernetes/authentication-config.yaml
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, authentication_config_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(authentication_config_yaml)}
   - path: /etc/kubernetes/audit-policy.yaml
     permissions: "0644"
     owner: root:root
-    content: |
-      ${indent(6, audit_policy_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(audit_policy_yaml)}
   - path: /root/kubeadm-join.yaml
     permissions: "0600"
     owner: root:root
-    content: |
-      ${indent(6, kubeadm_join_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(kubeadm_join_yaml)}
   - path: /usr/local/bin/etcd-snapshot.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, etcd_snapshot_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(etcd_snapshot_sh)}
   - path: /usr/local/bin/cert-renew.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, cert_renew_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(cert_renew_sh)}
   - path: /etc/systemd/system/etcd-snapshot.service
     permissions: "0644"
     content: |

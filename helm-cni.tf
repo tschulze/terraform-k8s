@@ -34,10 +34,23 @@ resource "null_resource" "wait_for_calico" {
   depends_on = [helm_release.tigera_operator]
 }
 
-# Enable Calico WireGuard for node-to-node pod traffic encryption (v4 + v6).
-# Tigera operator's Installation CR doesn't expose WireGuard fields; they live on
-# the cluster-wide FelixConfiguration "default" which Calico creates on bootstrap.
-# We wait for it then patch.
+# Calico WireGuard — DISABLED 2026-04-28.
+#
+# Was enabled yesterday (2026-04-27) as part of an inter-node encryption
+# hardening pass. Smoke test today (2026-04-28) found it breaks
+# apiserver→pod webhook calls: kube-apiserver runs hostNetwork on cp nodes,
+# and with WireGuard enabled Calico's iptables / FIB rules drop or misroute
+# the host→pod-network path. Symptom: every admission webhook (cert-manager,
+# kyverno) times out with "context deadline exceeded", which then cascades
+# (Rook's ceph-version detection job is admission-checked → blocked → cluster
+# stuck Progressing).
+#
+# Validated by patching `wireguardEnabled=false` live and watching nc from
+# cp-0 → webhook pod IP go from "timed out" to "succeeded".
+#
+# To re-enable safely, the right knob is probably `wireguardHostEncryptionEnabled`
+# (Calico ≥3.27) which extends WG to host-network sources. Needs separate
+# testing — leaving disabled until then so the cluster boots cleanly.
 resource "null_resource" "calico_wireguard" {
   triggers = {
     wait_id = null_resource.wait_for_calico.id
@@ -61,11 +74,12 @@ resource "null_resource" "calico_wireguard" {
       kubectl get felixconfiguration default >/dev/null \
         || { echo "ERROR: FelixConfiguration default never appeared"; exit 1; }
 
-      echo "Enabling WireGuard (IPv4 + IPv6) on Calico..."
+      # Belt-and-suspenders: ensure WG stays off in case a previous state had
+      # it enabled. Idempotent no-op when already false.
       kubectl patch felixconfiguration default --type=merge \
-        -p '{"spec":{"wireguardEnabled":true,"wireguardEnabledV6":true}}'
+        -p '{"spec":{"wireguardEnabled":false,"wireguardEnabledV6":false}}'
 
-      echo "WireGuard enabled. Verify with: kubectl get nodes -o jsonpath='{.items[*].status.addresses}' and 'wg show' on a node."
+      echo "WireGuard remains disabled (see comment in this file for why)."
     EOT
   }
 

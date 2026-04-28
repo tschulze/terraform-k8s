@@ -8,17 +8,18 @@ ssh_keys:
     ${indent(4, host_private_key_openssh)}
   ed25519_public: ${host_public_key_openssh}
 
+# Embedded files use cloud-init's `encoding: gz+b64` (matches cp-bootstrap/join).
 write_files:
   - path: /root/bootstrap-common.sh
     permissions: "0755"
     owner: root:root
-    content: |
-      ${indent(6, bootstrap_common_sh)}
+    encoding: gz+b64
+    content: ${base64gzip(bootstrap_common_sh)}
   - path: /root/kubeadm-join.yaml
     permissions: "0600"
     owner: root:root
-    content: |
-      ${indent(6, kubeadm_join_yaml)}
+    encoding: gz+b64
+    content: ${base64gzip(kubeadm_join_yaml)}
 
   - path: /root/worker-bootstrap.sh
     permissions: "0755"

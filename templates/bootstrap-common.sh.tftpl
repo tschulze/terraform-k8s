@@ -104,6 +104,12 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 
 # Kubernetes apt repo
 fetch https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/Release.key /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+# World-readable: cloud-init runcmd is invoked under `umask 077` (so log files
+# land at 0600), which leaks into every file created here. apt's signature
+# verifier (sqv on Debian 13) drops privileges to user `_apt`, which then
+# can't read a 0600 root-owned keyring → "InRelease is not signed". Same
+# reasoning as the docker.gpg chmod above.
+chmod a+r /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/ /" \
   > /etc/apt/sources.list.d/kubernetes.list
 
