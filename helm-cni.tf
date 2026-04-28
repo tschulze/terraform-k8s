@@ -34,23 +34,23 @@ resource "null_resource" "wait_for_calico" {
   depends_on = [helm_release.tigera_operator]
 }
 
-# Calico WireGuard — DISABLED 2026-04-28.
+# Calico WireGuard — pod-to-pod encryption (v4 + v6).
 #
-# Was enabled yesterday (2026-04-27) as part of an inter-node encryption
-# hardening pass. Smoke test today (2026-04-28) found it breaks
-# apiserver→pod webhook calls: kube-apiserver runs hostNetwork on cp nodes,
-# and with WireGuard enabled Calico's iptables / FIB rules drop or misroute
-# the host→pod-network path. Symptom: every admission webhook (cert-manager,
-# kyverno) times out with "context deadline exceeded", which then cascades
-# (Rook's ceph-version detection job is admission-checked → blocked → cluster
-# stuck Progressing).
+# Initial debugging on 2026-04-28 implicated WG in apiserver→webhook timeouts,
+# but root cause was actually our NetworkPolicy design (`ipBlock: 10.0.0.0/24`
+# source rule didn't match because `allow-intra-namespace` with empty
+# podSelector was restricting webhook ingress to same-namespace only — the
+# additional ipBlock rule didn't help because k8s NPs UNION their allows but
+# only when the matched policies don't ALL fail). After fixing the NPs in the
+# gitops repo (port-only ingress on webhook), basic WG works fine: cp→pod
+# nc succeeded, full admission round-trip via cert-manager-webhook succeeded.
 #
-# Validated by patching `wireguardEnabled=false` live and watching nc from
-# cp-0 → webhook pod IP go from "timed out" to "succeeded".
-#
-# To re-enable safely, the right knob is probably `wireguardHostEncryptionEnabled`
-# (Calico ≥3.27) which extends WG to host-network sources. Needs separate
-# testing — leaving disabled until then so the cluster boots cleanly.
+# `wireguardHostEncryptionEnabled` (extends WG to host-network sources) is
+# left OFF for now: tested as a runtime patch on a healthy cluster and it
+# cratered apiserver+etcd within seconds (cluster needed destroy/rebuild).
+# Likely needs to ship at install time, not as a runtime toggle. TODO: try
+# enabling it together with WG in this same patch on a fresh apply, with
+# a short post-enable smoke check; revert if apiserver doesn't recover.
 resource "null_resource" "calico_wireguard" {
   triggers = {
     wait_id = null_resource.wait_for_calico.id
@@ -74,12 +74,12 @@ resource "null_resource" "calico_wireguard" {
       kubectl get felixconfiguration default >/dev/null \
         || { echo "ERROR: FelixConfiguration default never appeared"; exit 1; }
 
-      # Belt-and-suspenders: ensure WG stays off in case a previous state had
-      # it enabled. Idempotent no-op when already false.
+      echo "Enabling WireGuard (IPv4 + IPv6, pod-to-pod only)..."
       kubectl patch felixconfiguration default --type=merge \
-        -p '{"spec":{"wireguardEnabled":false,"wireguardEnabledV6":false}}'
+        -p '{"spec":{"wireguardEnabled":true,"wireguardEnabledV6":true}}'
 
-      echo "WireGuard remains disabled (see comment in this file for why)."
+      echo "WireGuard enabled. Verify with:"
+      echo "  kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name} wg={.metadata.annotations.projectcalico\\.org/WireguardPublicKey}{\"\\n\"}{end}'"
     EOT
   }
 
