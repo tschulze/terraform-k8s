@@ -30,10 +30,13 @@
 # cp_server_type     = "cx23"   # 2 vCPU / 4 GiB — fine for CPs (default)
 # worker_server_type = "cx33"   # 4 vCPU / 8 GiB — Rook-Ceph wants ≥8 GiB (default)
 
-# ----- SSH access (defaults shown) -----
-
-# ssh_public_key_path  = "~/.ssh/id_ed25519_hetzner.pub"
-# ssh_private_key_path = "~/.ssh/id_ed25519_hetzner"
+# ----- SSH access -----
+#
+# Leave unset to auto-generate an ed25519 keypair at
+# secrets/<cluster_name>-ssh{,.pub} on first apply. Set this only when reusing
+# an existing key you already have on this machine. The public-key path is
+# always derived as "<this>.pub" — there is no separate variable.
+# ssh_private_key_path = "~/.ssh/id_ed25519"
 
 # ----- Networking (defaults shown) -----
 

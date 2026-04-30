@@ -37,7 +37,7 @@ resource "null_resource" "refresh_join_secrets" {
 
       LB_IP="${hcloud_load_balancer.k8s_api.ipv4}"
       SSH_PORT="${var.kube_api_lb_ssh_port}"
-      KEY="${pathexpand(var.ssh_private_key_path)}"
+      KEY="${local.ssh_private_key_abs}"
       BT_ID="${random_string.bt_id.result}"
       BT_TOKEN="${local.bootstrap_token}"
       CERT_KEY="${local.cert_key}"

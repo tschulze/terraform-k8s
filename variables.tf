@@ -88,17 +88,11 @@ variable "worker_server_type" {
   }
 }
 
-variable "ssh_public_key_path" {
-  type        = string
-  description = "Path to SSH public key uploaded to Hetzner for root login."
-  default     = "~/.ssh/id_ed25519_hetzner.pub"
-}
-
 variable "ssh_private_key_path" {
   type        = string
-  description = "Path to SSH private key used by Terraform to scp kubeconfig from cp[0]."
+  description = "Path to an existing SSH private key for root login on the Hetzner nodes. Empty (default) auto-generates an ed25519 keypair under secrets/$${cluster_name}-ssh{,.pub} on first apply and uses it. Set this only when reusing a key you already have on this machine. The matching public key is always derived as \"<this>.pub\" — there is no separate variable."
   sensitive   = true
-  default     = "~/.ssh/id_ed25519_hetzner"
+  default     = ""
 }
 
 variable "network_cidr" {
