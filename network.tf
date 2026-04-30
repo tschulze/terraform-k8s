@@ -1,6 +1,6 @@
 resource "hcloud_ssh_key" "admin" {
   name       = "${var.cluster_name}-admin"
-  public_key = trimspace(file(pathexpand(var.ssh_public_key_path)))
+  public_key = local.ssh_public_key_openssh
 }
 
 resource "hcloud_network" "kubenet" {
