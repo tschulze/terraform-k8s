@@ -50,9 +50,17 @@ write_files:
       # after a successful join kubeadm has consumed it — file is no longer
       # useful, just a credential leak waiting for a filesystem read.
       shred -u /root/kubeadm-join.yaml 2>/dev/null || rm -f /root/kubeadm-join.yaml
+      # Inner kubeadm-join.log captured kubeadm's stdout (token in plain).
+      # Safe to shred — kubeadm has exited. Outer worker-bootstrap.log is
+      # handled by the post-script runcmd below since the script is still
+      # being tee'd into it.
+      shred -u /root/kubeadm-join.log 2>/dev/null || rm -f /root/kubeadm-join.log
       touch /root/kubeadm-join.done
 
 runcmd:
   # umask 077 so /root/worker-bootstrap.log + /root/kubeadm-join.log land at
   # 0600 — kubeadm logs include the bootstrap token in plaintext.
   - umask 077 && bash /root/worker-bootstrap.sh 2>&1 | tee /root/worker-bootstrap.log
+  # Post-tee shred of the outer worker-bootstrap.log on success. See
+  # cp-bootstrap template for the full reasoning; same pattern.
+  - '[ -f /root/kubeadm-join.done ] && (shred -u /root/worker-bootstrap.log 2>/dev/null || rm -f /root/worker-bootstrap.log) || true'

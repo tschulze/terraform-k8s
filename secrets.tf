@@ -26,6 +26,22 @@ resource "random_password" "bt_secret" {
 
 resource "random_id" "cert_key" {
   byte_length = 32
+
+  # Rotate the kubeadm-certs encryption key on the same triggers that refresh
+  # the in-cluster join secrets. cert_key is the AES key that decrypts the
+  # `kubeadm-certs` Secret, which holds the cluster CA private key during
+  # CP joins. The Secret has a 2-hour TTL in-cluster but lives forever in
+  # whatever etcd backups overlapped that window — anyone who later combines
+  # an exfiltrated tfstate (with cert_key) and an old etcd snapshot can
+  # recover the CA key.
+  #
+  # Rotating on cp_count change covers the practical case (new CP needs a
+  # fresh upload-certs cycle anyway). Rotating on force_refresh_join_secrets
+  # gives the operator a manual override after a suspected leak.
+  keepers = {
+    cp_count      = tostring(var.cp_count)
+    force_refresh = tostring(var.force_refresh_join_secrets)
+  }
 }
 
 resource "random_id" "encryption_key" {

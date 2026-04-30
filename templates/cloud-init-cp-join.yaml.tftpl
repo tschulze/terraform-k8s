@@ -135,9 +135,18 @@ write_files:
       # — the file is no longer useful, just a credential leak waiting for
       # a filesystem read.
       shred -u /root/kubeadm-join.yaml 2>/dev/null || rm -f /root/kubeadm-join.yaml
+      # Inner kubeadm-join.log captured kubeadm's stdout (which echoes the
+      # token + cert-key during the upload-certs decode phase). Safe to
+      # shred here — the kubeadm process has exited. OUTER cp-join.log is
+      # handled by the post-script runcmd below since this script is still
+      # being tee'd into it.
+      shred -u /root/kubeadm-join.log 2>/dev/null || rm -f /root/kubeadm-join.log
       touch /root/kubeadm-join.done
 
 runcmd:
   # umask 077 so /root/cp-join.log + /root/kubeadm-join.log land at 0600 —
   # kubeadm logs include the bootstrap token + certificate-key in plaintext.
   - umask 077 && bash /root/cp-join.sh 2>&1 | tee /root/cp-join.log
+  # Post-tee shred of the outer cp-join.log on success. See cp-bootstrap
+  # template for the full reasoning; same pattern.
+  - '[ -f /root/kubeadm-join.done ] && (shred -u /root/cp-join.log 2>/dev/null || rm -f /root/cp-join.log) || true'

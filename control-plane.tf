@@ -1,6 +1,8 @@
 locals {
   bootstrap_common_sh = templatefile("${path.module}/templates/bootstrap-common.sh.tftpl", {
-    kubernetes_version = var.kubernetes_version
+    kubernetes_version        = var.kubernetes_version
+    apt_keyring_sha256_docker = var.apt_keyring_sha256_docker
+    apt_keyring_sha256_k8s    = var.apt_keyring_sha256_k8s
   })
 
   encryption_config_yaml = templatefile("${path.module}/templates/encryption-config.yaml.tftpl", {

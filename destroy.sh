@@ -50,3 +50,20 @@ terraform destroy -auto-approve "$@"
 # errors against the new cluster's certs (signed by a fresh kubeadm CA).
 echo "==> Removing stale kubeconfigs from secrets/..."
 rm -f secrets/admin.conf secrets/admin-*.conf
+
+# Shred tfstate BACKUP files. After a clean destroy the live tfstate has an
+# empty resource list, but terraform.tfstate.backup still holds the previous
+# full state — which contains the cluster CA private key, etcd encryption
+# key, every node's SSH host key, and every admin's RSA private key. Leaving
+# those readable on the operator's disk is the kind of slow leak that doesn't
+# show up until a laptop gets stolen six months later.
+#
+# `set -euo pipefail` at the top of this script means any earlier failure
+# aborts before this line — so the backups are only shredded on a successful
+# destroy, when their decrypt-and-recover value has gone to zero.
+echo "==> Shredding tfstate backup files (post-destroy, no longer needed)..."
+for f in terraform.tfstate.backup terraform.tfstate.*.backup; do
+  [ -f "$f" ] || continue
+  shred -u "$f" 2>/dev/null || rm -f "$f"
+  echo "    shredded $f"
+done
