@@ -25,9 +25,15 @@ resource "null_resource" "refresh_join_secrets" {
   # Re-run whenever node counts change (i.e. every scale-up/down). That covers
   # the only case when fresh join secrets actually matter. Avoids noisy "always
   # replaced" diffs in plan output for unrelated applies.
+  #
+  # `force_refresh_join_secrets` is the manual escape hatch: flip the var, apply,
+  # flip back. Needed when the bootstrap token expires from neglect (>24h since
+  # last apply) and the operator wants to re-create a tainted node without
+  # changing cp_count/worker_count.
   triggers = {
-    cp_count     = var.cp_count
-    worker_count = var.worker_count
+    cp_count      = var.cp_count
+    worker_count  = var.worker_count
+    force_refresh = var.force_refresh_join_secrets
   }
 
   provisioner "local-exec" {
@@ -38,7 +44,7 @@ resource "null_resource" "refresh_join_secrets" {
       LB_IP="${hcloud_load_balancer.k8s_api.ipv4}"
       SSH_PORT="${var.kube_api_lb_ssh_port}"
       KEY="${pathexpand(var.ssh_private_key_path)}"
-      BT_ID="${random_string.bt_id.result}"
+      BT_ID="${random_password.bt_id.result}"
       BT_TOKEN="${local.bootstrap_token}"
       CERT_KEY="${local.cert_key}"
 

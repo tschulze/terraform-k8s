@@ -22,7 +22,10 @@ for arg in "$@"; do
     --apply)              APPLY=true ;;
     --include-prerelease) INCLUDE_PRE=true ;;
     -h|--help)
-      head -15 "$0" | sed 's/^# \?//'
+      # Print the leading comment block (until the first non-comment line).
+      # Earlier this was `head -15`, which silently truncated the help text
+      # whenever the docstring grew past 15 lines.
+      awk '/^#!/ { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
       exit 0 ;;
     *) echo "Unknown arg: $arg (use --help)" >&2; exit 1 ;;
   esac

@@ -1,5 +1,8 @@
 terraform {
-  required_version = ">= 1.6.0"
+  # 1.9.0 introduced cross-variable validation (a `validation` block on
+  # variable A may reference variable B) — used in variables.tf to assert
+  # that digitalocean_token is set whenever cluster_dns_zone is non-empty.
+  required_version = ">= 1.9.0"
 
   required_providers {
     hcloud = {

@@ -14,8 +14,12 @@ locals {
   cp_node_names     = [for i in range(var.cp_count) : "${var.cluster_name}-cp-${i}"]
   worker_node_names = [for i in range(var.worker_count) : "${var.cluster_name}-worker-${i}"]
 
-  bootstrap_token = "${random_string.bt_id.result}.${random_string.bt_secret.result}"
-  cert_key        = random_id.cert_key.hex
+  # bootstrap_token is sensitive via random_password; sensitive() on cert_key
+  # makes random_id.hex behave the same way so the value is redacted in
+  # `terraform plan` / `terraform show`. Both are kubeadm credentials that
+  # rotate (24h / 2h) but logging them is still avoidable.
+  bootstrap_token = sensitive("${random_password.bt_id.result}.${random_password.bt_secret.result}")
+  cert_key        = sensitive(random_id.cert_key.hex)
 
   kubeconfig_path = "${path.module}/secrets/admin.conf"
 }

@@ -28,9 +28,10 @@ SNAP_ENC="$BACKUP_DIR/snapshot-$TS.db.age"
 # leaving a small window during which the plaintext (containing every
 # decrypted Secret in the cluster) was readable from disk.
 #
-# Pipefail is already on (set -o pipefail isn't here, but set -e + pipefail
-# inheritance from the systemd unit's default would catch most failures —
-# being explicit is cheap):
+# etcdctl prints progress / "snapshot saved" to stderr on stdout-mode (the
+# binary snapshot is the actual stdout). We let stderr through so a failure
+# (etcd down, missing cert, wrong endpoint) lands in `journalctl -u
+# etcd-snapshot.service` instead of being silently masked.
 set -o pipefail
 ( umask 077 && \
   ETCDCTL_API=3 etcdctl \
@@ -38,7 +39,7 @@ set -o pipefail
     --cacert="$PKI_DIR/ca.crt" \
     --cert="$PKI_DIR/healthcheck-client.crt" \
     --key="$PKI_DIR/healthcheck-client.key" \
-    snapshot save /dev/stdout 2>/dev/null \
+    snapshot save /dev/stdout \
   | age -r "$AGE_RECIPIENT" -o "$SNAP_ENC" )
 chmod 600 "$SNAP_ENC"
 SNAP="$SNAP_ENC"

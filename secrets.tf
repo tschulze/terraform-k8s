@@ -1,8 +1,12 @@
-resource "random_string" "bt_id" {
+resource "random_password" "bt_id" {
   # kubeadm bootstrap-token ID: 6 chars, regex [a-z0-9]{6}. Earlier this was
   # numeric-only — only ~20 bits (1M possibilities), small enough that within
   # the 24h TTL an attacker spamming join attempts could collide on the ID and
   # interfere with legitimate joins. Base36 brings it to ~31 bits (~2B).
+  #
+  # random_password (vs random_string) marks .result sensitive, so the token
+  # — which is plaintext credential material with a 24h TTL — is redacted in
+  # `terraform plan` / `terraform show` output.
   length  = 6
   special = false
   upper   = false
@@ -10,8 +14,9 @@ resource "random_string" "bt_id" {
   numeric = true
 }
 
-resource "random_string" "bt_secret" {
+resource "random_password" "bt_secret" {
   # kubeadm bootstrap-token secret: 16 chars, regex [a-z0-9]{16}. ~83 bits.
+  # See bt_id above for why this is random_password rather than random_string.
   length  = 16
   special = false
   upper   = false
