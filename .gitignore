@@ -12,5 +12,10 @@ secrets/
 !secrets/sealed-secrets-master.key.yaml.age
 !secrets/argocd-admin-password.yaml.age
 
+# Rendered output of examples/networkpolicy-template.yaml.tftpl (regenerated
+# on every `terraform apply` with the cluster's actual network_cidr — local
+# artifact, not source of truth).
+examples/networkpolicy-template.yaml
+
 # Claude Code per-project state (tool allowlist, scheduled-task locks)
 .claude/

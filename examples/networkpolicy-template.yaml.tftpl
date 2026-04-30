@@ -1,6 +1,10 @@
 # Template: apply this set of NetworkPolicies to a new application namespace
 # to get the same default-deny posture as the `default` namespace.
 #
+# Rendered by Terraform from examples/networkpolicy-template.yaml.tftpl so the
+# ipBlock CIDRs track var.network_cidr automatically. Edit the .tftpl and
+# `terraform apply` regenerates the rendered .yaml in the same directory.
+#
 #   sed 's/REPLACE_NAMESPACE/myapp/g' examples/networkpolicy-template.yaml | kubectl apply -f -
 #
 # Then add per-app allowlists for the specific traffic your workloads need
@@ -71,7 +75,7 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 10.0.0.0/24      # match var.network_cidr
+            cidr: ${network_cidr}
       ports:
         - protocol: TCP
           port: 6443

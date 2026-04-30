@@ -168,21 +168,36 @@ variable "cluster_dns_zone" {
 
 variable "digitalocean_token" {
   type        = string
-  description = "DigitalOcean API token, scoped to Domain read+update only. Generate at DigitalOcean Cloud Panel → API → Tokens with Custom Scopes (Domain: read, update). Only used when cluster_dns_zone is set."
+  description = "DigitalOcean API token, scoped to Domain read+update only. Generate at DigitalOcean Cloud Panel → API → Tokens with Custom Scopes (Domain: read, update). Only used when cluster_dns_zone is set — but REQUIRED whenever it is, otherwise the apply fails 30 minutes in with a generic 401 from the DO provider."
   default     = ""
   sensitive   = true
+  validation {
+    # Cross-variable validation (Terraform 1.9+). Catches the
+    # "I set cluster_dns_zone but forgot to export TF_VAR_digitalocean_token"
+    # case at plan time instead of mid-apply.
+    condition     = var.cluster_dns_zone == "" || var.digitalocean_token != ""
+    error_message = "digitalocean_token must be set when cluster_dns_zone is non-empty. Set TF_VAR_digitalocean_token or assign in terraform.tfvars."
+  }
 }
 
 variable "services_lb_type" {
   type        = string
-  description = "Hetzner Load Balancer type for the Traefik (HTTP/HTTPS) services LB."
+  description = "Hetzner Load Balancer type for the Traefik (HTTP/HTTPS) services LB. Valid: lb11 (10k conn), lb21 (20k), lb31 (50k)."
   default     = "lb11"
+  validation {
+    condition     = can(regex("^lb(11|21|31)$", var.services_lb_type))
+    error_message = "services_lb_type must be one of lb11, lb21, lb31."
+  }
 }
 
 variable "kube_api_lb_type" {
   type        = string
-  description = "Hetzner Load Balancer type for the kube-API + SSH-jump LB."
+  description = "Hetzner Load Balancer type for the kube-API + SSH-jump LB. Valid: lb11 (10k conn), lb21 (20k), lb31 (50k)."
   default     = "lb11"
+  validation {
+    condition     = can(regex("^lb(11|21|31)$", var.kube_api_lb_type))
+    error_message = "kube_api_lb_type must be one of lb11, lb21, lb31."
+  }
 }
 
 variable "kube_api_lb_ssh_port" {
@@ -231,6 +246,12 @@ variable "traefik_node_port_https" {
     condition     = var.traefik_node_port_https >= 30000 && var.traefik_node_port_https <= 32767
     error_message = "traefik_node_port_https must be in the Kubernetes NodePort range 30000-32767."
   }
+}
+
+variable "force_refresh_join_secrets" {
+  type        = bool
+  description = "Set to true to force refresh of the cluster bootstrap token (24h TTL) and kubeadm-certs Secret (2h TTL) on the next apply, even if cp_count and worker_count are unchanged. Useful when the existing token expired (e.g. cluster sat idle >24h, then you want to manually re-create a tainted node). Toggle true → apply → toggle back to false; the trigger only cares about the value change."
+  default     = false
 }
 
 variable "etcd_retired_encryption_keys" {

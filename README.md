@@ -43,7 +43,7 @@ State holds the cluster CA private key (RSA-4096), the Hetzner API token, the et
 - `apply.sh` chmods `terraform.tfstate*` to `0600` after every apply
 - Do **not** sync this directory to iCloud/Dropbox/OneDrive — they ignore POSIX modes and replicate state at default permissions
 - macOS Time Machine includes `~/` by default; either exclude this directory or accept that backups need the same physical protection as the live disk
-- A remote backend (`backend "s3"` with SSE-KMS, or Terraform Cloud workspaces with state encryption) moves the secret to the backend's HSM/KMS — the right answer if more than one operator manages the cluster
+- This module ships with **local state and no locking**. Two operators applying concurrently from different laptops will silently corrupt the state file — there's no Terraform-level mutex protecting it. If more than one operator manages the cluster, configure a remote backend (`backend "s3"` with SSE-KMS + DynamoDB locking, or Terraform Cloud workspaces with state encryption) before the second operator runs anything; the backend moves the secret to the provider's HSM/KMS and adds the lock that local state lacks
 
 ### `~/.config/sops/age/keys.txt` (your laptop)
 
@@ -63,6 +63,21 @@ Mitigations:
 - **Don't share between operators.** Each operator should have their own identity; encrypt blobs to all recipients in parallel (`age -r age1op1... -r age1op2...`). Removing an operator means rotating the controller master key + the Argo password (and ideally the etcd encryption key) so their copy stops being load-bearing.
 
 The tfstate and the age identity together are equivalent to root on the cluster. Either alone gives partial control. Both stolen = full game-over with no audit trail.
+
+### Network threat model — single-firewall posture
+
+Every node has both a public IPv4 and a public IPv6 (`hcloud_server.public_net.ipv{4,6}_enabled = true`). The control-plane components — apiserver, controller-manager, scheduler — bind on `0.0.0.0`, which means they're listening on the public NICs as well as the Cloud Network. Same for `etcd`'s metrics endpoint (`listen-metrics-urls: http://0.0.0.0:2381`) and `kube-proxy`'s `metricsBindAddress: 0.0.0.0:10249`.
+
+**The only thing standing between the public internet and those listeners is the Hetzner Cloud Firewall** (`firewall.tf`), which is configured allowlist-style: a single inbound ICMP rule, which makes the firewall default-deny everything else (per Hetzner's docs: *"If the firewall has at least one rule, all other traffic of the same direction is blocked"*). If the firewall is detached, mis-applied, or its label-selector stops matching the nodes (e.g. you change `cluster_name` on existing nodes), the apiserver becomes a public 6443 listener with no second layer.
+
+Practical consequences:
+
+- Verify the firewall is attached to every node after every apply. The label selector is `cluster=${var.cluster_name}`; any new server resource that forgets to set that label drops out of firewall coverage. `nmap -sT -p- <node-public-ipv4>` should show only ICMP responses, no TCP services.
+- Don't change `cluster_name` on a running cluster without re-checking firewall coverage.
+- The Hetzner CFW is enforced at the hypervisor; it's not bypassable from inside the VM. But it has no logging — you cannot tell from cluster-side audit logs whether a connection attempt was firewalled or simply never tried.
+- Pod-to-pod traffic on the Cloud Network is **not** firewalled by CFW (it's a public-NIC-only filter). NetworkPolicy + Calico WireGuard provide the in-cluster equivalent (see `examples/networkpolicy-template.yaml.tftpl` for the per-namespace default-deny starter).
+
+Tightening this — switching every component's `bind-address` to the Cloud Network NIC only — is a tractable but separate change: each component would need to learn the auto-assigned private IP at cloud-init time (the same `__NODE_PRIVATE_IP__` substitution we already do for `localAPIEndpoint.advertiseAddress`). Tracked as a follow-up; the current single-firewall posture is acceptable as long as the CFW invariants above hold.
 
 ## Cost (running, defaults, Nuremberg, EUR — gross)
 

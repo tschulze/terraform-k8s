@@ -44,7 +44,13 @@ done
 mkdir -p "$REPO_ROOT/secrets"
 
 if [ -z "$PASSWORD" ]; then
-  PASSWORD="$(openssl rand -base64 18 | tr -d '/+=' | head -c 24)"
+  # Pull alphanumerics straight from /dev/urandom and take exactly 24 chars.
+  # Earlier this was `openssl rand -base64 18 | tr -d '/+=' | head -c 24`, which
+  # ALWAYS truncated to ≤24 — but stripping `/+=` from a base64 output of length
+  # 24 routinely yielded shorter strings (and silently shipped them as the admin
+  # password). Oversampling /dev/urandom guarantees the requested length and
+  # 24 alphanumeric chars = ~143 bits of entropy.
+  PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)"
   echo "Generated random password (24 chars): $PASSWORD"
   echo "  Save this in your password manager — only you and the SealedSecret know it."
   echo

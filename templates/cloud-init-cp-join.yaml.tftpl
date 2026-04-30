@@ -61,9 +61,7 @@ write_files:
 
       [Service]
       Type=oneshot
-      %{ if etcd_age_recipient != "" ~}
       Environment=AGE_RECIPIENT=${etcd_age_recipient}
-      %{ endif ~}
       ExecStart=/usr/local/bin/etcd-snapshot.sh
   - path: /etc/systemd/system/etcd-snapshot.timer
     permissions: "0644"
