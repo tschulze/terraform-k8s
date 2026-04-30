@@ -254,6 +254,53 @@ variable "force_refresh_join_secrets" {
   default     = false
 }
 
+variable "apt_keyring_sha256_docker" {
+  type        = string
+  description = <<-EOT
+    Optional SHA256 of /etc/apt/keyrings/docker.gpg AFTER `gpg --dearmor`. If
+    set, every node verifies the downloaded keyring against this hash before
+    trusting it as an apt repository signer — defends against TLS MITM /
+    cert-mis-issuance against download.docker.com between the time you last
+    audited the key and the time the bootstrap script runs.
+
+    Compute on a known-good machine after a fresh fetch:
+      curl -fsSL https://download.docker.com/linux/debian/gpg \
+        | gpg --batch --no-tty --dearmor \
+        | sha256sum
+
+    The Docker apt key rotates rarely (years between events); a single pinned
+    value should outlast multiple cluster lifetimes. Empty = skip the check
+    (default — falls back to plain TLS trust on download.docker.com).
+  EOT
+  default     = ""
+  validation {
+    condition     = var.apt_keyring_sha256_docker == "" || can(regex("^[0-9a-f]{64}$", var.apt_keyring_sha256_docker))
+    error_message = "apt_keyring_sha256_docker must be a 64-char lowercase-hex SHA256, or empty to skip."
+  }
+}
+
+variable "apt_keyring_sha256_k8s" {
+  type        = string
+  description = <<-EOT
+    Optional SHA256 of /etc/apt/keyrings/kubernetes-apt-keyring.gpg AFTER
+    `gpg --dearmor`. Same defense as apt_keyring_sha256_docker, but for
+    pkgs.k8s.io. Note: this key is per-minor-version (one key per
+    /core:/stable:/v1.X/) and rotates roughly yearly when a new minor is
+    released — pin per-cluster against the kubernetes_version you're
+    deploying. Empty = skip (default).
+
+    Compute (replace 1.35 with your kubernetes_version):
+      curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key \
+        | gpg --batch --no-tty --dearmor \
+        | sha256sum
+  EOT
+  default     = ""
+  validation {
+    condition     = var.apt_keyring_sha256_k8s == "" || can(regex("^[0-9a-f]{64}$", var.apt_keyring_sha256_k8s))
+    error_message = "apt_keyring_sha256_k8s must be a 64-char lowercase-hex SHA256, or empty to skip."
+  }
+}
+
 variable "etcd_retired_encryption_keys" {
   type = list(object({
     name   = string

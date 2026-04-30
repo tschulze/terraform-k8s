@@ -105,6 +105,34 @@ ceph_osd_volume_size_gb = 10
 # cluster_dns_zone   = "k8s.example.com"
 # digitalocean_token = "dop_v1_..."
 
+# ----- Supply-chain pinning (optional, defaults shown) -----
+#
+# Pin the SHA256 of the Docker and Kubernetes apt keyring files (after
+# `gpg --dearmor`). Empty = skip the check (plain TLS trust on
+# download.docker.com / pkgs.k8s.io). Set the values to defend against TLS
+# MITM / cert-mis-issuance against those origins.
+#
+# Compute on a known-good host AFTER a fresh fetch:
+#   curl -fsSL https://download.docker.com/linux/debian/gpg \
+#     | gpg --batch --no-tty --dearmor | sha256sum
+#   curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key \
+#     | gpg --batch --no-tty --dearmor | sha256sum
+#   # The k8s key is per-minor — re-derive when bumping kubernetes_version.
+#
+# apt_keyring_sha256_docker = ""
+# apt_keyring_sha256_k8s    = ""
+
+# ----- Operational toggles -----
+#
+# Force-refresh the cluster bootstrap token (24h TTL) and kubeadm-certs
+# Secret (2h TTL) on the next apply, even if cp_count and worker_count are
+# unchanged. Useful when re-creating a tainted node after the cluster sat
+# idle longer than 24h. Toggle true → apply → toggle back to false.
+# Also rotates random_id.cert_key (kubeadm-certs encryption key) so any
+# previously-captured kubeadm-certs Secret blob becomes useless.
+#
+# force_refresh_join_secrets = false
+
 # ----- Argo CD (gitops deployment) -----
 #
 # UI hostname — set to expose via Traefik (HTTPRoute managed by gitops repo).

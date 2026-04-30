@@ -156,6 +156,13 @@ write_files:
       # filesystem read window is a credential leak. After successful init
       # the file is no longer needed (kubeadm has already consumed it).
       shred -u /root/kubeadm-config.yaml 2>/dev/null || rm -f /root/kubeadm-config.yaml
+      # Same reasoning for kubeadm-init.log: kubeadm prints the bootstrap
+      # token + certificate-key on stdout, which `tee` captured at 0600.
+      # Safe to shred here because the kubeadm process has exited and tee
+      # closed its fd before we reach this line. The OUTER cp-bootstrap.log
+      # (which also captured the same kubeadm output through this script's
+      # own tee) is shredded from runcmd AFTER this script exits — see below.
+      shred -u /root/kubeadm-init.log 2>/dev/null || rm -f /root/kubeadm-init.log
       touch /root/kubeadm-init.done
 
 runcmd:
@@ -164,3 +171,11 @@ runcmd:
   # those would be readable by any pod that mounts /root via hostPath
   # (PSA-exempt namespaces can do that). 0600 + /root being 0700 contains it.
   - umask 077 && bash /root/cp-bootstrap.sh 2>&1 | tee /root/cp-bootstrap.log
+  # Post-tee shred of the OUTER bootstrap log. Conditional on the success
+  # marker so that a FAILED bootstrap leaves the log on disk for operator
+  # post-mortem (the high-value log entries — kubeadm's stdout — only appear
+  # AFTER the apt/clock/network setup has succeeded; if we're failing it's
+  # almost always before that). On success, the log is pure credential
+  # liability: kubeadm's --upload-certs output includes the bootstrap token
+  # AND the certificate-key in plaintext.
+  - '[ -f /root/kubeadm-init.done ] && (shred -u /root/cp-bootstrap.log 2>/dev/null || rm -f /root/cp-bootstrap.log) || true'

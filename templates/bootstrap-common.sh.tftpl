@@ -94,9 +94,35 @@ fetch() {
   return 1
 }
 
+# Optional integrity pin. Plain TLS protects in-flight; this protects against
+# a successful TLS-layer compromise (CA-mis-issuance, MITM behind a corporate
+# proxy, hostile mirror serving on the same hostname). If the operator pinned
+# a SHA256 in terraform.tfvars, abort here on mismatch — apt would otherwise
+# accept the keyring and silently trust whatever the next signed Release file
+# says. Empty pin = skip (preserves earlier plain-TLS-only behavior).
+verify_pin() {
+  local label=$1 path=$2 expected=$3
+  if [ -z "$expected" ]; then
+    return 0
+  fi
+  local actual
+  actual=$(sha256sum "$path" | awk '{print $1}')
+  if [ "$actual" != "$expected" ]; then
+    echo "ERROR: $label keyring sha256 mismatch" >&2
+    echo "       path:     $path" >&2
+    echo "       expected: $expected" >&2
+    echo "       actual:   $actual" >&2
+    echo "       (the upstream key may have rotated — re-derive on a known-good host" >&2
+    echo "        and update var.$label in terraform.tfvars before re-applying)" >&2
+    return 1
+  fi
+  echo "$label keyring sha256 ok"
+}
+
 # Docker repo (for containerd.io)
 install -m 0755 -d /etc/apt/keyrings
 fetch https://download.docker.com/linux/debian/gpg /etc/apt/keyrings/docker.gpg
+verify_pin apt_keyring_sha256_docker /etc/apt/keyrings/docker.gpg "${apt_keyring_sha256_docker}"
 chmod a+r /etc/apt/keyrings/docker.gpg
 CODENAME=$(. /etc/os-release && echo $${VERSION_CODENAME})
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $${CODENAME} stable" \
@@ -104,6 +130,7 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 
 # Kubernetes apt repo
 fetch https://pkgs.k8s.io/core:/stable:/v${kubernetes_version}/deb/Release.key /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+verify_pin apt_keyring_sha256_k8s /etc/apt/keyrings/kubernetes-apt-keyring.gpg "${apt_keyring_sha256_k8s}"
 # World-readable: cloud-init runcmd is invoked under `umask 077` (so log files
 # land at 0600), which leaks into every file created here. apt's signature
 # verifier (sqv on Debian 13) drops privileges to user `_apt`, which then
